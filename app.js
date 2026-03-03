@@ -2,13 +2,22 @@ let plans = [];
 
 const state = { search: "", status: "all", sort: "desc", editingId: null };
 const STORAGE_KEY = "myplans-data";
-const SYNC_KEY = "myplans-sync-config";
 const VALID_STATUSES = new Set(["planned", "completed", "canceled"]);
+
+const REMOTE_CONFIG = {
+  owner: "MOIOLDWIN",
+  repo: "checklist",
+  branch: "main",
+  path: "resources/plans.txt",
+  // Reemplazar por token real con permisos de contenido para habilitar guardado compartido.
+  token: "",
+};
 
 const els = {
   plansList: document.getElementById("plansList"),
   emptyState: document.getElementById("emptyState"),
   planCounter: document.getElementById("planCounter"),
+  syncMessage: document.getElementById("syncMessage"),
   newPlanBtn: document.getElementById("newPlanBtn"),
   mobileNewPlanBtn: document.getElementById("mobileNewPlanBtn"),
   exportBtn: document.getElementById("exportBtn"),
@@ -16,14 +25,6 @@ const els = {
   searchInput: document.getElementById("searchInput"),
   statusFilter: document.getElementById("statusFilter"),
   sortByDate: document.getElementById("sortByDate"),
-  loadRemoteBtn: document.getElementById("loadRemoteBtn"),
-  saveRemoteBtn: document.getElementById("saveRemoteBtn"),
-  ownerInput: document.getElementById("ownerInput"),
-  repoInput: document.getElementById("repoInput"),
-  branchInput: document.getElementById("branchInput"),
-  pathInput: document.getElementById("pathInput"),
-  tokenInput: document.getElementById("tokenInput"),
-  syncMessage: document.getElementById("syncMessage"),
   modalBackdrop: document.getElementById("planModalBackdrop"),
   closeModalBtn: document.getElementById("closeModalBtn"),
   cancelFormBtn: document.getElementById("cancelFormBtn"),
@@ -42,9 +43,17 @@ init();
 
 async function init() {
   bindEvents();
-  loadSyncConfig();
-  const localLoaded = loadFromLocalStorage();
-  if (!localLoaded) await loadFromResourceFile();
+
+  // Prioriza siempre el archivo remoto compartido.
+  const loadedRemote = await loadPlansFromGithub();
+
+  if (!loadedRemote) {
+    const loadedLocal = loadFromLocalStorage();
+    if (!loadedLocal) {
+      await loadFromResourceFile();
+    }
+  }
+
   renderPlans();
 }
 
@@ -53,22 +62,40 @@ function bindEvents() {
   els.mobileNewPlanBtn.addEventListener("click", () => openModal());
   els.closeModalBtn.addEventListener("click", closeModal);
   els.cancelFormBtn.addEventListener("click", closeModal);
-  els.modalBackdrop.addEventListener("click", (e) => e.target === els.modalBackdrop && closeModal());
-  document.addEventListener("keydown", (e) => e.key === "Escape" && !els.modalBackdrop.classList.contains("hidden") && closeModal());
+
+  els.modalBackdrop.addEventListener("click", (event) => {
+    if (event.target === els.modalBackdrop) closeModal();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !els.modalBackdrop.classList.contains("hidden")) {
+      closeModal();
+    }
+  });
 
   els.planForm.addEventListener("submit", handleFormSubmit);
-  els.searchInput.addEventListener("input", () => { state.search = els.searchInput.value.trim().toLowerCase(); renderPlans(); });
-  els.statusFilter.addEventListener("change", () => { state.status = els.statusFilter.value; renderPlans(); });
-  els.sortByDate.addEventListener("change", () => { state.sort = els.sortByDate.value; renderPlans(); });
+  els.searchInput.addEventListener("input", () => {
+    state.search = els.searchInput.value.trim().toLowerCase();
+    renderPlans();
+  });
+
+  els.statusFilter.addEventListener("change", () => {
+    state.status = els.statusFilter.value;
+    renderPlans();
+  });
+
+  els.sortByDate.addEventListener("change", () => {
+    state.sort = els.sortByDate.value;
+    renderPlans();
+  });
 
   els.exportBtn.addEventListener("click", exportPlans);
   els.syncBtn.addEventListener("click", savePlansToGithub);
-  els.loadRemoteBtn.addEventListener("click", loadPlansFromGithub);
-  els.saveRemoteBtn.addEventListener("click", savePlansToGithub);
+}
 
-  ["ownerInput", "repoInput", "branchInput", "pathInput", "tokenInput"].forEach((id) => {
-    els[id].addEventListener("change", persistSyncConfig);
-  });
+function setSyncMessage(msg, isError = false) {
+  els.syncMessage.textContent = msg;
+  els.syncMessage.style.color = isError ? "#8f3d3d" : "#4f6f5f";
 }
 
 function generateId() {
@@ -77,12 +104,18 @@ function generateId() {
 }
 
 function sanitizeText(value = "") {
-  return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function normalizePlan(input = {}) {
   const now = new Date().toISOString();
   const status = VALID_STATUSES.has(input.status) ? input.status : "planned";
+
   return {
     id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : generateId(),
     title: typeof input.title === "string" ? input.title.trim() : "",
@@ -90,26 +123,36 @@ function normalizePlan(input = {}) {
     time: typeof input.time === "string" ? input.time.trim() : "",
     description: typeof input.description === "string" ? input.description.trim() : "",
     status,
-    createdAt: typeof input.createdAt === "string" && !Number.isNaN(Date.parse(input.createdAt)) ? input.createdAt : now,
-    updatedAt: typeof input.updatedAt === "string" && !Number.isNaN(Date.parse(input.updatedAt)) ? input.updatedAt : now,
+    createdAt:
+      typeof input.createdAt === "string" && !Number.isNaN(Date.parse(input.createdAt))
+        ? input.createdAt
+        : now,
+    updatedAt:
+      typeof input.updatedAt === "string" && !Number.isNaN(Date.parse(input.updatedAt))
+        ? input.updatedAt
+        : now,
   };
 }
 
 function parseTxtToPlans(text) {
   if (typeof text !== "string" || !text.trim()) return [];
+
   return text
     .split(/\n-{3,}\n/g)
     .map((block) => block.trim())
     .filter(Boolean)
     .map((block) => {
       const plan = {};
+
       block.split("\n").forEach((line) => {
         const idx = line.indexOf(":");
         if (idx < 1) return;
+
         const key = line.slice(0, idx).trim();
         const value = line.slice(idx + 1).trim();
         if (key) plan[key] = value;
       });
+
       return normalizePlan(plan);
     })
     .filter((p) => p.title.length >= 3);
@@ -117,6 +160,7 @@ function parseTxtToPlans(text) {
 
 function serializePlansToTxt(items) {
   if (!Array.isArray(items)) return "";
+
   return items
     .map((plan) => {
       const p = normalizePlan(plan);
@@ -157,96 +201,65 @@ function loadFromLocalStorage() {
     return false;
   }
 }
-function persistToLocalStorage() { localStorage.setItem(STORAGE_KEY, JSON.stringify(plans)); }
 
-function getSyncConfig() {
-  return {
-    owner: els.ownerInput.value.trim(),
-    repo: els.repoInput.value.trim(),
-    branch: els.branchInput.value.trim() || "main",
-    path: els.pathInput.value.trim() || "resources/plans.txt",
-    token: els.tokenInput.value.trim(),
-  };
+function persistToLocalStorage() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
 }
 
-function persistSyncConfig() {
-  const cfg = getSyncConfig();
-  localStorage.setItem(SYNC_KEY, JSON.stringify({ ...cfg, token: "" }));
-}
+async function githubGetFile() {
+  const url = `https://api.github.com/repos/${REMOTE_CONFIG.owner}/${REMOTE_CONFIG.repo}/contents/${REMOTE_CONFIG.path}?ref=${REMOTE_CONFIG.branch}`;
+  const headers = REMOTE_CONFIG.token ? { Authorization: `Bearer ${REMOTE_CONFIG.token}` } : {};
 
-function loadSyncConfig() {
-  try {
-    const raw = localStorage.getItem(SYNC_KEY);
-    if (!raw) return;
-    const cfg = JSON.parse(raw);
-    els.ownerInput.value = cfg.owner || "";
-    els.repoInput.value = cfg.repo || "";
-    els.branchInput.value = cfg.branch || "main";
-    els.pathInput.value = cfg.path || "resources/plans.txt";
-  } catch {}
-}
-
-function setSyncMessage(msg, isError = false) {
-  els.syncMessage.textContent = msg;
-  els.syncMessage.style.color = isError ? "#8f3d3d" : "#4f6f5f";
-}
-
-async function githubGetFile(config) {
-  const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${config.path}?ref=${encodeURIComponent(config.branch)}`;
-  const headers = config.token ? { Authorization: `Bearer ${config.token}` } : {};
   const response = await fetch(url, { headers });
-  if (!response.ok) throw new Error("No se pudo leer el archivo online.");
+  if (!response.ok) throw new Error("No se pudo sincronizar ahora.");
+
   const data = await response.json();
   const content = data.content ? atob(data.content.replace(/\n/g, "")) : "";
   return { sha: data.sha, content };
 }
 
 async function loadPlansFromGithub() {
-  const config = getSyncConfig();
-  if (!config.owner || !config.repo) {
-    setSyncMessage("Completa owner y repo para cargar online.", true);
-    return;
-  }
   try {
-    const { content } = await githubGetFile(config);
+    const { content } = await githubGetFile();
     plans = parseTxtToPlans(content);
     persistToLocalStorage();
-    renderPlans();
-    setSyncMessage("Datos online cargados correctamente.");
-  } catch (error) {
-    setSyncMessage(error.message || "No se pudo cargar online.", true);
+    setSyncMessage("Datos sincronizados.");
+    return true;
+  } catch {
+    setSyncMessage("Se cargó tu copia local.", true);
+    return false;
   }
 }
 
 async function savePlansToGithub() {
-  const config = getSyncConfig();
-  if (!config.owner || !config.repo || !config.token) {
-    setSyncMessage("Completa owner, repo y token para guardar online.", true);
+  if (!REMOTE_CONFIG.token) {
+    setSyncMessage("Guardado online no disponible en este momento.", true);
     return;
   }
 
   try {
-    const current = await githubGetFile(config);
+    const current = await githubGetFile();
     const content = serializePlansToTxt(plans);
-    const url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${config.path}`;
+    const url = `https://api.github.com/repos/${REMOTE_CONFIG.owner}/${REMOTE_CONFIG.repo}/contents/${REMOTE_CONFIG.path}`;
+
     const response = await fetch(url, {
       method: "PUT",
       headers: {
-        Authorization: `Bearer ${config.token}`,
+        Authorization: `Bearer ${REMOTE_CONFIG.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        message: "Update plans from My Plans web app",
+        message: "Update plans from My Plans",
         content: btoa(unescape(encodeURIComponent(content))),
         sha: current.sha,
-        branch: config.branch,
+        branch: REMOTE_CONFIG.branch,
       }),
     });
 
-    if (!response.ok) throw new Error("No se pudo guardar online.");
-    setSyncMessage("Cambios guardados online correctamente.");
-  } catch (error) {
-    setSyncMessage(error.message || "No se pudo guardar online.", true);
+    if (!response.ok) throw new Error();
+    setSyncMessage("Cambios guardados correctamente.");
+  } catch {
+    setSyncMessage("No fue posible guardar ahora.", true);
   }
 }
 
@@ -255,10 +268,15 @@ function getFilteredAndSortedPlans() {
     .filter((plan) => {
       const matchesStatus = state.status === "all" || plan.status === state.status;
       const q = state.search;
-      const matchesSearch = !q || plan.title.toLowerCase().includes(q) || plan.description.toLowerCase().includes(q);
+      const matchesSearch =
+        !q || plan.title.toLowerCase().includes(q) || plan.description.toLowerCase().includes(q);
       return matchesStatus && matchesSearch;
     })
-    .sort((a, b) => (state.sort === "asc" ? buildDateValue(a) - buildDateValue(b) : buildDateValue(b) - buildDateValue(a)));
+    .sort((a, b) =>
+      state.sort === "asc"
+        ? buildDateValue(a) - buildDateValue(b)
+        : buildDateValue(b) - buildDateValue(a)
+    );
 }
 
 function buildDateValue(plan) {
@@ -266,21 +284,33 @@ function buildDateValue(plan) {
     const timestamp = Date.parse(`${plan.date}T${plan.time || "00:00"}`);
     if (!Number.isNaN(timestamp)) return timestamp;
   }
+
   const updated = Date.parse(plan.updatedAt);
   return Number.isNaN(updated) ? 0 : updated;
 }
 
-function badgeLabel(status) { return status === "completed" ? "Completed" : status === "canceled" ? "Canceled" : "Planned"; }
+function badgeLabel(status) {
+  if (status === "completed") return "Completed";
+  if (status === "canceled") return "Canceled";
+  return "Planned";
+}
 
 function renderPlans() {
   const visible = getFilteredAndSortedPlans();
   els.planCounter.textContent = `${visible.length} ${visible.length === 1 ? "plan" : "planes"}`;
-  els.plansList.innerHTML = visible.map((plan) => `
+
+  els.plansList.innerHTML = visible
+    .map(
+      (plan) => `
     <article class="plan-card" data-id="${sanitizeText(plan.id)}">
       <div class="card-head">
         <div>
           <h3 class="plan-title">${sanitizeText(plan.title)}</h3>
-          <div class="plan-date">${plan.date ? `${sanitizeText(plan.date)}${plan.time ? ` · ${sanitizeText(plan.time)}` : ""}` : "Sin fecha"}</div>
+          <div class="plan-date">${
+            plan.date
+              ? `${sanitizeText(plan.date)}${plan.time ? ` · ${sanitizeText(plan.time)}` : ""}`
+              : "Sin fecha"
+          }</div>
         </div>
         <span class="badge badge-${sanitizeText(plan.status)}">${badgeLabel(plan.status)}</span>
       </div>
@@ -290,27 +320,34 @@ function renderPlans() {
         <button class="btn btn-primary" data-action="complete" type="button">Completar</button>
         <button class="btn btn-danger" data-action="delete" type="button">Eliminar</button>
       </div>
-    </article>`).join("");
+    </article>`
+    )
+    .join("");
 
   els.emptyState.classList.toggle("hidden", visible.length > 0);
-  els.plansList.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", handleCardAction));
+  els.plansList
+    .querySelectorAll("[data-action]")
+    .forEach((button) => button.addEventListener("click", handleCardAction));
 }
 
 function handleCardAction(event) {
   const action = event.currentTarget.dataset.action;
   const card = event.currentTarget.closest(".plan-card");
   if (!card) return;
+
   const id = card.dataset.id;
   const plan = plans.find((item) => item.id === id);
   if (!plan) return;
 
   if (action === "edit") return openModal(plan);
+
   if (action === "complete") {
     plan.status = "completed";
     plan.updatedAt = new Date().toISOString();
     persistToLocalStorage();
     return renderPlans();
   }
+
   if (action === "delete") {
     plans = plans.filter((item) => item.id !== id);
     persistToLocalStorage();
@@ -344,8 +381,17 @@ function closeModal() {
 function validateForm() {
   const title = els.titleInput.value.trim();
   const date = els.dateInput.value.trim();
-  if (!title || title.length < 3) { els.titleError.textContent = "El título debe tener al menos 3 caracteres."; return false; }
-  if (date && Number.isNaN(Date.parse(`${date}T00:00:00`))) { els.titleError.textContent = "Ingresa una fecha válida."; return false; }
+
+  if (!title || title.length < 3) {
+    els.titleError.textContent = "El título debe tener al menos 3 caracteres.";
+    return false;
+  }
+
+  if (date && Number.isNaN(Date.parse(`${date}T00:00:00`))) {
+    els.titleError.textContent = "Ingresa una fecha válida.";
+    return false;
+  }
+
   els.titleError.textContent = "";
   return true;
 }
@@ -353,6 +399,7 @@ function validateForm() {
 function handleFormSubmit(event) {
   event.preventDefault();
   if (!validateForm()) return;
+
   const now = new Date().toISOString();
   const payload = {
     id: els.planId.value || generateId(),
@@ -365,7 +412,11 @@ function handleFormSubmit(event) {
   };
 
   if (state.editingId) {
-    plans = plans.map((plan) => (plan.id !== state.editingId ? plan : normalizePlan({ ...plan, ...payload, createdAt: plan.createdAt, updatedAt: now })));
+    plans = plans.map((plan) =>
+      plan.id !== state.editingId
+        ? plan
+        : normalizePlan({ ...plan, ...payload, createdAt: plan.createdAt, updatedAt: now })
+    );
   } else {
     plans.unshift(normalizePlan({ ...payload, createdAt: now, updatedAt: now }));
   }
