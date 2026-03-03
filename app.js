@@ -10,7 +10,7 @@ const REMOTE_CONFIG = {
   branch: "main",
   path: "resources/plans.txt",
   // Reemplazar por token real con permisos de contenido para habilitar guardado compartido.
-  token: "",
+  token: "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",
 };
 
 const els = {
