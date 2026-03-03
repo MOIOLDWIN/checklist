@@ -9,7 +9,8 @@ const REMOTE_CONFIG = {
   repo: "checklist",
   branch: "main",
   path: "resources/plans.txt",
-  // Reemplazar por token real con permisos de contenido para habilitar guardado compartido.
+  // Pega aquí tu token real (NO lo compartas). Debe tener permisos de Contents: Read/Write (fine-grained)
+  // o scope "repo" (classic).
   token: "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",
 };
 
@@ -44,7 +45,7 @@ init();
 async function init() {
   bindEvents();
 
-  // Prioriza siempre el archivo remoto compartido.
+  // Prioriza cargar remoto (si repo es público funcionará sin token; si es privado requiere token)
   const loadedRemote = await loadPlansFromGithub();
 
   if (!loadedRemote) {
@@ -74,6 +75,7 @@ function bindEvents() {
   });
 
   els.planForm.addEventListener("submit", handleFormSubmit);
+
   els.searchInput.addEventListener("input", () => {
     state.search = els.searchInput.value.trim().toLowerCase();
     renderPlans();
@@ -94,6 +96,7 @@ function bindEvents() {
 }
 
 function setSyncMessage(msg, isError = false) {
+  if (!els.syncMessage) return;
   els.syncMessage.textContent = msg;
   els.syncMessage.style.color = isError ? "#8f3d3d" : "#4f6f5f";
 }
@@ -169,7 +172,7 @@ function serializePlansToTxt(items) {
         `title: ${p.title}`,
         `date: ${p.date}`,
         `time: ${p.time}`,
-        `description: ${p.description.replace(/\n/g, " ")}`,
+        `description: ${String(p.description || "").replace(/\n/g, " ")}`,
         `status: ${p.status}`,
         `createdAt: ${p.createdAt}`,
         `updatedAt: ${p.updatedAt}`,
@@ -180,8 +183,8 @@ function serializePlansToTxt(items) {
 
 async function loadFromResourceFile() {
   try {
-    const response = await fetch("resources/plans.txt");
-    if (!response.ok) throw new Error();
+    const response = await fetch("resources/plans.txt", { cache: "no-store" });
+    if (!response.ok) throw new Error("No se pudo leer resources/plans.txt");
     plans = parseTxtToPlans(await response.text());
     persistToLocalStorage();
   } catch {
@@ -206,15 +209,48 @@ function persistToLocalStorage() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
 }
 
-async function githubGetFile() {
-  const url = `https://api.github.com/repos/${REMOTE_CONFIG.owner}/${REMOTE_CONFIG.repo}/contents/${REMOTE_CONFIG.path}?ref=${REMOTE_CONFIG.branch}`;
-  const headers = REMOTE_CONFIG.token ? { Authorization: `Bearer ${REMOTE_CONFIG.token}` } : {};
+/* =========================
+   UTF-8 safe base64 helpers
+   ========================= */
+function base64ToUtf8(b64) {
+  const clean = String(b64 || "").replace(/\n/g, "");
+  if (!clean) return "";
+  const bytes = Uint8Array.from(atob(clean), (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
+}
 
-  const response = await fetch(url, { headers });
-  if (!response.ok) throw new Error("No se pudo sincronizar ahora.");
+function utf8ToBase64(text) {
+  const bytes = new TextEncoder().encode(String(text || ""));
+  let binary = "";
+  bytes.forEach((b) => (binary += String.fromCharCode(b)));
+  return btoa(binary);
+}
+
+/* =========================
+   GitHub API (Contents)
+   ========================= */
+async function githubGetFile() {
+  const url = `https://api.github.com/repos/${REMOTE_CONFIG.owner}/${REMOTE_CONFIG.repo}/contents/${REMOTE_CONFIG.path}?ref=${encodeURIComponent(
+    REMOTE_CONFIG.branch
+  )}`;
+
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  // Para repos privados, necesitas token también en GET
+  if (REMOTE_CONFIG.token) headers.Authorization = `Bearer ${REMOTE_CONFIG.token}`;
+
+  const response = await fetch(url, { headers, cache: "no-store" });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`GET falló (${response.status}): ${text}`);
+  }
 
   const data = await response.json();
-  const content = data.content ? atob(data.content.replace(/\n/g, "")) : "";
+  const content = data.content ? base64ToUtf8(data.content) : "";
   return { sha: data.sha, content };
 }
 
@@ -225,7 +261,7 @@ async function loadPlansFromGithub() {
     persistToLocalStorage();
     setSyncMessage("Datos sincronizados.");
     return true;
-  } catch {
+  } catch (err) {
     setSyncMessage("Se cargó tu copia local.", true);
     return false;
   }
@@ -233,43 +269,57 @@ async function loadPlansFromGithub() {
 
 async function savePlansToGithub() {
   if (!REMOTE_CONFIG.token) {
-    setSyncMessage("Guardado online no disponible en este momento.", true);
+    setSyncMessage("No hay token configurado para guardar en GitHub.", true);
     return;
   }
 
   try {
     const current = await githubGetFile();
-    const content = serializePlansToTxt(plans);
+
+    const contentText = serializePlansToTxt(plans);
+    const contentB64 = utf8ToBase64(contentText);
+
     const url = `https://api.github.com/repos/${REMOTE_CONFIG.owner}/${REMOTE_CONFIG.repo}/contents/${REMOTE_CONFIG.path}`;
 
     const response = await fetch(url, {
       method: "PUT",
       headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
         Authorization: `Bearer ${REMOTE_CONFIG.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         message: "Update plans from My Plans",
-        content: btoa(unescape(encodeURIComponent(content))),
+        content: contentB64,
         sha: current.sha,
         branch: REMOTE_CONFIG.branch,
       }),
     });
 
-    if (!response.ok) throw new Error();
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`PUT falló (${response.status}): ${text}`);
+    }
+
     setSyncMessage("Cambios guardados correctamente.");
-  } catch {
-    setSyncMessage("No fue posible guardar ahora.", true);
+  } catch (err) {
+    setSyncMessage(`No fue posible guardar: ${err.message}`, true);
   }
 }
 
+/* =========================
+   UI: filters, render, CRUD
+   ========================= */
 function getFilteredAndSortedPlans() {
   return plans
     .filter((plan) => {
       const matchesStatus = state.status === "all" || plan.status === state.status;
       const q = state.search;
       const matchesSearch =
-        !q || plan.title.toLowerCase().includes(q) || plan.description.toLowerCase().includes(q);
+        !q ||
+        plan.title.toLowerCase().includes(q) ||
+        plan.description.toLowerCase().includes(q);
       return matchesStatus && matchesSearch;
     })
     .sort((a, b) =>
