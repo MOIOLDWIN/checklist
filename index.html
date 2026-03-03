@@ -1,119 +1,171 @@
 <!doctype html>
 <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Plans</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-wrap">
-          <h1>My Plans</h1>
-          <p class="subtitle">Organiza tus planes con claridad</p>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Plans</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <div class="brand">
+        <div class="brand__mark" aria-hidden="true">
+          <span class="dot"></span>
         </div>
-        <div class="topbar-actions">
-          <div class="counter" id="planCounter">0 planes</div>
-          <button class="btn btn-primary" id="newPlanBtn" type="button">Nuevo Plan</button>
-          <button class="btn btn-soft" id="exportBtn" type="button">Exportar</button>
-          <button class="btn btn-soft" id="syncBtn" type="button">Guardar cambios</button>
+        <div class="brand__text">
+          <div class="brand__name">My Plans</div>
+          <div class="brand__subtitle">Organiza tus planes con claridad</div>
         </div>
-      </header>
+      </div>
 
-      <section class="toolbar" aria-label="Filtros y búsqueda">
-        <label class="field-search" for="searchInput">
-          <span class="field-label">Buscar</span>
-          <input id="searchInput" type="search" placeholder="Título o descripción" />
-        </label>
-
-        <label class="field-select" for="statusFilter">
-          <span class="field-label">Estado</span>
-          <select id="statusFilter">
-            <option value="all">Todos</option>
-            <option value="planned">Planned</option>
-            <option value="completed">Completed</option>
-            <option value="canceled">Canceled</option>
-          </select>
-        </label>
-
-        <label class="field-select" for="sortByDate">
-          <span class="field-label">Ordenar</span>
-          <select id="sortByDate">
-            <option value="desc">Fecha descendente</option>
-            <option value="asc">Fecha ascendente</option>
-          </select>
-        </label>
-      </section>
-
-      <p class="status-message" id="syncMessage" aria-live="polite"></p>
-
-      <main>
-        <section class="plans-grid" id="plansList" aria-live="polite"></section>
-        <div class="empty-state hidden" id="emptyState">
-          <h2>Sin resultados</h2>
-          <p>Empieza creando tu primer plan o ajusta los filtros.</p>
+      <div class="topbar__actions">
+        <div class="counter" title="Planes visibles">
+          <span class="counter__label">Visibles</span>
+          <span class="counter__value" id="visibleCount">0</span>
         </div>
-      </main>
+
+        <button class="btn btn--primary" id="btnNew" type="button">
+          <span class="btn__icon" aria-hidden="true">＋</span>
+          Nuevo Plan
+        </button>
+
+        <button class="btn btn--soft" id="btnExport" type="button">Exportar</button>
+        <button class="btn btn--soft" id="btnSave" type="button">Guardar cambios</button>
+      </div>
     </div>
 
-    <button class="fab" id="mobileNewPlanBtn" type="button" aria-label="Crear nuevo plan">+</button>
+    <div class="toolbar">
+      <div class="field">
+        <label class="label" for="searchInput">Buscar</label>
+        <div class="inputWrap">
+          <span class="inputIcon" aria-hidden="true">⌕</span>
+          <input id="searchInput" class="input input--search" type="search" placeholder="Título o descripción" autocomplete="off" />
+        </div>
+      </div>
 
-    <div class="modal-backdrop hidden" id="planModalBackdrop" aria-hidden="true">
-      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-        <header class="modal-header">
-          <h2 id="modalTitle">Nuevo Plan</h2>
-          <button class="icon-btn" id="closeModalBtn" type="button" aria-label="Cerrar">×</button>
-        </header>
+      <div class="field">
+        <label class="label" for="statusSelect">Estado</label>
+        <select id="statusSelect" class="select">
+          <option value="all">Todos</option>
+          <option value="planned">Planned</option>
+          <option value="completed">Completed</option>
+          <option value="canceled">Canceled</option>
+        </select>
+      </div>
 
-        <form id="planForm" novalidate>
-          <input type="hidden" id="planId" />
+      <div class="field">
+        <label class="label" for="orderSelect">Orden</label>
+        <select id="orderSelect" class="select">
+          <option value="desc">Fecha descendente</option>
+          <option value="asc">Fecha ascendente</option>
+        </select>
+      </div>
+    </div>
+  </header>
 
-          <label class="field" for="titleInput">
-            <span>Título *</span>
-            <input id="titleInput" type="text" minlength="3" required placeholder="Ej. Revisar objetivos del mes" />
-            <small class="error" id="titleError"></small>
-          </label>
+  <main class="container">
+    <div class="feedback" id="feedback" role="status" aria-live="polite"></div>
 
-          <div class="field-row">
-            <label class="field" for="dateInput">
-              <span>Fecha</span>
-              <input id="dateInput" type="date" />
-            </label>
-            <label class="field" for="timeInput">
-              <span>Hora</span>
-              <input id="timeInput" type="time" />
-            </label>
+    <section class="grid" id="plansGrid" aria-label="Lista de planes"></section>
+
+    <section class="empty" id="emptyState" hidden>
+      <div class="empty__card">
+        <div class="empty__title">Sin resultados</div>
+        <div class="empty__text">Empieza creando tu primer plan o ajusta los filtros.</div>
+        <button class="btn btn--primary btn--wide" id="btnEmptyNew" type="button">Crear mi primer plan</button>
+      </div>
+    </section>
+  </main>
+
+  <button class="fab" id="fab" type="button" aria-label="Nuevo Plan">+</button>
+
+  <div class="modal" id="modal" aria-hidden="true">
+    <div class="modal__overlay" data-close="true"></div>
+
+    <div class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal__header">
+        <div class="modal__titles">
+          <div class="modal__eyebrow" id="modalEyebrow">My Plans</div>
+          <h2 class="modal__title" id="modalTitle">Nuevo Plan</h2>
+        </div>
+        <button class="iconBtn" id="btnModalClose" type="button" aria-label="Cerrar">✕</button>
+      </div>
+
+      <form class="modal__body" id="planForm" novalidate>
+        <div class="formGrid">
+          <div class="field field--span2">
+            <label class="label" for="titleInput">Título <span class="req">*</span></label>
+            <input id="titleInput" class="input" type="text" placeholder="Ej. Cena especial" minlength="3" required />
+            <div class="hint" id="titleHint">Mínimo 3 caracteres.</div>
           </div>
 
-          <label class="field" for="statusInput">
-            <span>Estado</span>
-            <select id="statusInput">
-              <option value="planned">Planned</option>
-              <option value="completed">Completed</option>
-              <option value="canceled">Canceled</option>
+          <div class="field">
+            <label class="label" for="dateInput">Fecha</label>
+            <input id="dateInput" class="input" type="date" />
+          </div>
+
+          <div class="field">
+            <label class="label" for="timeInput">Hora</label>
+            <input id="timeInput" class="input" type="time" />
+          </div>
+
+          <div class="field field--span2">
+            <label class="label" for="statusInput">Estado</label>
+            <select id="statusInput" class="select">
+              <option value="planned">planned</option>
+              <option value="completed">completed</option>
+              <option value="canceled">canceled</option>
             </select>
-          </label>
+          </div>
 
-          <label class="field" for="descriptionInput">
-            <span>Descripción</span>
-            <textarea id="descriptionInput" rows="4" placeholder="Detalles opcionales"></textarea>
-          </label>
+          <div class="field field--span2">
+            <label class="label" for="descInput">Descripción</label>
+            <textarea id="descInput" class="textarea" rows="4" placeholder="Detalles del plan (opcional)"></textarea>
+          </div>
+        </div>
 
-          <footer class="modal-footer">
-            <button class="btn btn-soft" id="cancelFormBtn" type="button">Cancelar</button>
-            <button class="btn btn-primary" type="submit">Guardar</button>
-          </footer>
-        </form>
-      </section>
+        <div class="modal__footer">
+          <button class="btn btn--soft" id="btnCancel" type="button">Cancelar</button>
+          <button class="btn btn--primary" id="btnSubmit" type="submit">Guardar</button>
+        </div>
+      </form>
     </div>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script>
-  window.sb = supabase.createClient(
-    "https://kfcbmruknrhmfjptykun.supabase.co",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmY2JtcnVrbnJobWZqcHl0a3VuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1MDMwNTYsImV4cCI6MjA4ODA3OTA1Nn0.EnGoPfZIUgfRvWxJ4zC0pXLZp7DrjxfBIRtzo9HSX7M"
-  );
-</script>
-    <script src="app.js"></script>
-  </body>
+  </div>
+
+  <template id="cardTemplate">
+    <article class="card">
+      <div class="card__top">
+        <div class="card__titleRow">
+          <h3 class="card__title"></h3>
+          <span class="badge" data-badge></span>
+        </div>
+        <div class="card__meta">
+          <span class="meta" data-datetime></span>
+          <span class="meta meta--dot" aria-hidden="true">•</span>
+          <span class="meta" data-updated></span>
+        </div>
+      </div>
+
+      <p class="card__desc" data-desc></p>
+
+      <div class="card__actions">
+        <button class="btn btn--soft btn--sm" data-action="edit" type="button">Editar</button>
+        <button class="btn btn--soft btn--sm" data-action="complete" type="button">Completar</button>
+        <button class="btn btn--danger btn--sm" data-action="delete" type="button">Eliminar</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    window.sb = supabase.createClient(
+      "https://kfcbmruknrhmfjptykun.supabase.co",
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmY2JtcnVrbnJobWZqcHl0a3VuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1MDMwNTYsImV4cCI6MjA4ODA3OTA1Nn0.EnGoPfZIUgfRvWxJ4zC0pXLZp7DrjxfBIRtzo9HSX7M"
+    );
+  </script>
+
+  <script src="app.js"></script>
+</body>
 </html>
