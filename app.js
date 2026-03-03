@@ -224,15 +224,9 @@
     }
   }
 
-  async function createPlan(row) {
-    const { data, error } = await sb
-      .from("plans")
-      .insert(row)
-      .select("*")
-      .single();
-    if (error) throw error;
-    return data;
-  }
+  const created = await createPlan({
+  title, date, time, status, description
+});
 
   async function updatePlan(id, patch) {
     const { data, error } = await sb
