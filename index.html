@@ -17,7 +17,7 @@
           <div class="counter" id="planCounter">0 planes</div>
           <button class="btn btn-primary" id="newPlanBtn" type="button">Nuevo Plan</button>
           <button class="btn btn-soft" id="exportBtn" type="button">Exportar</button>
-          <button class="btn btn-soft" id="syncBtn" type="button">Guardar online</button>
+          <button class="btn btn-soft" id="syncBtn" type="button">Guardar cambios</button>
         </div>
       </header>
 
@@ -46,36 +46,7 @@
         </label>
       </section>
 
-      <section class="repo-sync" aria-label="Sincronización">
-        <h2>Conectar repositorio</h2>
-        <div class="repo-grid">
-          <label class="field" for="ownerInput">
-            <span>Owner</span>
-            <input id="ownerInput" type="text" placeholder="usuario" />
-          </label>
-          <label class="field" for="repoInput">
-            <span>Repo</span>
-            <input id="repoInput" type="text" placeholder="nombre-repo" />
-          </label>
-          <label class="field" for="branchInput">
-            <span>Branch</span>
-            <input id="branchInput" type="text" placeholder="main" />
-          </label>
-          <label class="field" for="pathInput">
-            <span>Archivo</span>
-            <input id="pathInput" type="text" placeholder="resources/plans.txt" />
-          </label>
-          <label class="field token-field" for="tokenInput">
-            <span>Token</span>
-            <input id="tokenInput" type="password" placeholder="github_pat_..." autocomplete="off" />
-          </label>
-        </div>
-        <div class="repo-actions">
-          <button class="btn btn-soft" id="loadRemoteBtn" type="button">Cargar online</button>
-          <button class="btn btn-primary" id="saveRemoteBtn" type="button">Guardar online</button>
-          <small id="syncMessage" aria-live="polite"></small>
-        </div>
-      </section>
+      <p class="status-message" id="syncMessage" aria-live="polite"></p>
 
       <main>
         <section class="plans-grid" id="plansList" aria-live="polite"></section>
