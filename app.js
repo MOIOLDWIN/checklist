@@ -1,18 +1,16 @@
+/* =========================================================
+   My Plans — Supabase (NO LOGIN) + Realtime + CRUD
+   Requiere en index.html:
+   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+   <script> window.sb = supabase.createClient(SUPABASE_URL, ANON_KEY); </script>
+   <script src="app.js"></script>
+========================================================= */
+
 let plans = [];
 
 const state = { search: "", status: "all", sort: "desc", editingId: null };
 const STORAGE_KEY = "myplans-data";
 const VALID_STATUSES = new Set(["planned", "completed", "canceled"]);
-
-const REMOTE_CONFIG = {
-  owner: "MOIOLDWIN",
-  repo: "checklist",
-  branch: "main",
-  path: "resources/plans.txt",
-  // Pega aquí tu token real (NO lo compartas). Debe tener permisos de Contents: Read/Write (fine-grained)
-  // o scope "repo" (classic).
-  token: "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",
-};
 
 const els = {
   plansList: document.getElementById("plansList"),
@@ -40,22 +38,36 @@ const els = {
   titleError: document.getElementById("titleError"),
 };
 
+const sb = window.sb; // supabase client from HTML
+let realtimeChannel = null;
+let isRealtimeReady = false;
+
 init();
 
 async function init() {
   bindEvents();
 
-  // Prioriza cargar remoto (si repo es público funcionará sin token; si es privado requiere token)
-  const loadedRemote = await loadPlansFromGithub();
-
-  if (!loadedRemote) {
+  if (!sb) {
+    setSyncMessage("Supabase no está configurado (window.sb no existe).", true);
+    // Igual carga local para que no se rompa.
     const loadedLocal = loadFromLocalStorage();
-    if (!loadedLocal) {
-      await loadFromResourceFile();
-    }
+    if (!loadedLocal) plans = [];
+    renderPlans();
+    return;
+  }
+
+  // 1) intenta cargar desde Supabase
+  const loadedRemote = await loadPlansFromSupabase();
+  if (!loadedRemote) {
+    // 2) si falla, local
+    const loadedLocal = loadFromLocalStorage();
+    if (!loadedLocal) plans = [];
   }
 
   renderPlans();
+
+  // 3) suscripción realtime
+  subscribeRealtime();
 }
 
 function bindEvents() {
@@ -91,19 +103,21 @@ function bindEvents() {
     renderPlans();
   });
 
+  // Exportar: ahora exporta JSON (por si quieres backup local)
   els.exportBtn.addEventListener("click", exportPlans);
-  els.syncBtn.addEventListener("click", savePlansToGithub);
+
+  // “Guardar cambios”: en Supabase se guarda automático.
+  // Este botón lo usaremos como “Refrescar ahora”.
+  els.syncBtn.addEventListener("click", async () => {
+    await loadPlansFromSupabase(true);
+    renderPlans();
+  });
 }
 
 function setSyncMessage(msg, isError = false) {
   if (!els.syncMessage) return;
   els.syncMessage.textContent = msg;
   els.syncMessage.style.color = isError ? "#8f3d3d" : "#4f6f5f";
-}
-
-function generateId() {
-  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
-  return `plan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function sanitizeText(value = "") {
@@ -120,7 +134,7 @@ function normalizePlan(input = {}) {
   const status = VALID_STATUSES.has(input.status) ? input.status : "planned";
 
   return {
-    id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : generateId(),
+    id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : cryptoId(),
     title: typeof input.title === "string" ? input.title.trim() : "",
     date: typeof input.date === "string" ? input.date.trim() : "",
     time: typeof input.time === "string" ? input.time.trim() : "",
@@ -137,59 +151,13 @@ function normalizePlan(input = {}) {
   };
 }
 
-function parseTxtToPlans(text) {
-  if (typeof text !== "string" || !text.trim()) return [];
-
-  return text
-    .split(/\n-{3,}\n/g)
-    .map((block) => block.trim())
-    .filter(Boolean)
-    .map((block) => {
-      const plan = {};
-
-      block.split("\n").forEach((line) => {
-        const idx = line.indexOf(":");
-        if (idx < 1) return;
-
-        const key = line.slice(0, idx).trim();
-        const value = line.slice(idx + 1).trim();
-        if (key) plan[key] = value;
-      });
-
-      return normalizePlan(plan);
-    })
-    .filter((p) => p.title.length >= 3);
+function cryptoId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `plan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function serializePlansToTxt(items) {
-  if (!Array.isArray(items)) return "";
-
-  return items
-    .map((plan) => {
-      const p = normalizePlan(plan);
-      return [
-        `id: ${p.id}`,
-        `title: ${p.title}`,
-        `date: ${p.date}`,
-        `time: ${p.time}`,
-        `description: ${String(p.description || "").replace(/\n/g, " ")}`,
-        `status: ${p.status}`,
-        `createdAt: ${p.createdAt}`,
-        `updatedAt: ${p.updatedAt}`,
-      ].join("\n");
-    })
-    .join("\n---\n");
-}
-
-async function loadFromResourceFile() {
-  try {
-    const response = await fetch("resources/plans.txt", { cache: "no-store" });
-    if (!response.ok) throw new Error("No se pudo leer resources/plans.txt");
-    plans = parseTxtToPlans(await response.text());
-    persistToLocalStorage();
-  } catch {
-    plans = [];
-  }
+function persistToLocalStorage() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
 }
 
 function loadFromLocalStorage() {
@@ -205,112 +173,142 @@ function loadFromLocalStorage() {
   }
 }
 
-function persistToLocalStorage() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
+/* =========================================================
+   Supabase helpers
+========================================================= */
+
+function rowToPlan(row) {
+  return normalizePlan({
+    id: row.id,
+    title: row.title,
+    date: row.date ?? "",
+    time: row.time ?? "",
+    description: row.description ?? "",
+    status: row.status ?? "planned",
+    createdAt: row.created_at ?? new Date().toISOString(),
+    updatedAt: row.updated_at ?? new Date().toISOString(),
+  });
 }
 
-/* =========================
-   UTF-8 safe base64 helpers
-   ========================= */
-function base64ToUtf8(b64) {
-  const clean = String(b64 || "").replace(/\n/g, "");
-  if (!clean) return "";
-  const bytes = Uint8Array.from(atob(clean), (c) => c.charCodeAt(0));
-  return new TextDecoder("utf-8").decode(bytes);
-}
+function planToRow(plan) {
+  const p = normalizePlan(plan);
 
-function utf8ToBase64(text) {
-  const bytes = new TextEncoder().encode(String(text || ""));
-  let binary = "";
-  bytes.forEach((b) => (binary += String.fromCharCode(b)));
-  return btoa(binary);
-}
-
-/* =========================
-   GitHub API (Contents)
-   ========================= */
-async function githubGetFile() {
-  const url = `https://api.github.com/repos/${REMOTE_CONFIG.owner}/${REMOTE_CONFIG.repo}/contents/${REMOTE_CONFIG.path}?ref=${encodeURIComponent(
-    REMOTE_CONFIG.branch
-  )}`;
-
-  const headers = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
+  // Supabase columns:
+  // id uuid, title text, date date, time time, description text, status text
+  // created_at timestamptz, updated_at timestamptz
+  return {
+    id: p.id, // si es uuid válido, perfecto; si no, Supabase puede rechazarlo. Mejor dejar que Supabase cree el id.
+    title: p.title,
+    date: p.date ? p.date : null,
+    time: p.time ? p.time : null,
+    description: p.description ? p.description : null,
+    status: p.status,
+    updated_at: new Date().toISOString(),
   };
-
-  // Para repos privados, necesitas token también en GET
-  if (REMOTE_CONFIG.token) headers.Authorization = `Bearer ${REMOTE_CONFIG.token}`;
-
-  const response = await fetch(url, { headers, cache: "no-store" });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`GET falló (${response.status}): ${text}`);
-  }
-
-  const data = await response.json();
-  const content = data.content ? base64ToUtf8(data.content) : "";
-  return { sha: data.sha, content };
 }
 
-async function loadPlansFromGithub() {
+async function loadPlansFromSupabase(showMessage = false) {
   try {
-    const { content } = await githubGetFile();
-    plans = parseTxtToPlans(content);
+    const { data, error } = await sb
+      .from("plans")
+      .select("*")
+      .order("updated_at", { ascending: false });
+
+    if (error) throw error;
+
+    plans = (data || []).map(rowToPlan).filter((p) => p.title.length >= 3);
     persistToLocalStorage();
-    setSyncMessage("Datos sincronizados.");
+
+    if (showMessage) setSyncMessage("Actualizado desde la nube.");
+    else setSyncMessage("Datos sincronizados.");
     return true;
   } catch (err) {
-    setSyncMessage("Se cargó tu copia local.", true);
+    setSyncMessage(`No se pudo cargar desde la nube: ${err.message}`, true);
     return false;
   }
 }
 
-async function savePlansToGithub() {
-  if (!REMOTE_CONFIG.token) {
-    setSyncMessage("No hay token configurado para guardar en GitHub.", true);
-    return;
-  }
+async function createPlanSupabase(plan) {
+  // Deja que Supabase genere el UUID si no quieres depender de randomUUID.
+  // Si quieres usar tu id local, asegúrate que sea uuid válido. Aquí: si no parece uuid, lo quitamos.
+  const p = normalizePlan(plan);
+  const looksUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    p.id
+  );
 
+  const payload = {
+    title: p.title,
+    date: p.date || null,
+    time: p.time || null,
+    description: p.description || null,
+    status: p.status,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (looksUuid) payload.id = p.id;
+
+  const { data, error } = await sb.from("plans").insert(payload).select("*").single();
+  if (error) throw error;
+  return rowToPlan(data);
+}
+
+async function updatePlanSupabase(id, changes) {
+  const payload = {
+    title: typeof changes.title === "string" ? changes.title.trim() : undefined,
+    date: changes.date ? changes.date : null,
+    time: changes.time ? changes.time : null,
+    description: typeof changes.description === "string" ? changes.description.trim() : null,
+    status: changes.status && VALID_STATUSES.has(changes.status) ? changes.status : undefined,
+    updated_at: new Date().toISOString(),
+  };
+
+  // elimina undefined para no pisar campos
+  Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+
+  const { data, error } = await sb.from("plans").update(payload).eq("id", id).select("*").single();
+  if (error) throw error;
+  return rowToPlan(data);
+}
+
+async function deletePlanSupabase(id) {
+  const { error } = await sb.from("plans").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* =========================================================
+   Realtime
+========================================================= */
+
+function subscribeRealtime() {
   try {
-    const current = await githubGetFile();
-
-    const contentText = serializePlansToTxt(plans);
-    const contentB64 = utf8ToBase64(contentText);
-
-    const url = `https://api.github.com/repos/${REMOTE_CONFIG.owner}/${REMOTE_CONFIG.repo}/contents/${REMOTE_CONFIG.path}`;
-
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        Authorization: `Bearer ${REMOTE_CONFIG.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: "Update plans from My Plans",
-        content: contentB64,
-        sha: current.sha,
-        branch: REMOTE_CONFIG.branch,
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`PUT falló (${response.status}): ${text}`);
+    if (realtimeChannel) {
+      sb.removeChannel(realtimeChannel);
+      realtimeChannel = null;
     }
 
-    setSyncMessage("Cambios guardados correctamente.");
+    realtimeChannel = sb
+      .channel("plans-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "plans" }, async () => {
+        // Cuando alguien cambie algo, refresca lista.
+        await loadPlansFromSupabase();
+        renderPlans();
+      })
+      .subscribe((status) => {
+        // statuses: SUBSCRIBED, TIMED_OUT, CHANNEL_ERROR, CLOSED
+        if (status === "SUBSCRIBED") {
+          isRealtimeReady = true;
+          setSyncMessage("Realtime activo ✅");
+        }
+      });
   } catch (err) {
-    setSyncMessage(`No fue posible guardar: ${err.message}`, true);
+    setSyncMessage(`Realtime no disponible: ${err.message}`, true);
   }
 }
 
-/* =========================
-   UI: filters, render, CRUD
-   ========================= */
+/* =========================================================
+   UI logic
+========================================================= */
+
 function getFilteredAndSortedPlans() {
   return plans
     .filter((plan) => {
@@ -334,7 +332,6 @@ function buildDateValue(plan) {
     const timestamp = Date.parse(`${plan.date}T${plan.time || "00:00"}`);
     if (!Number.isNaN(timestamp)) return timestamp;
   }
-
   const updated = Date.parse(plan.updatedAt);
   return Number.isNaN(updated) ? 0 : updated;
 }
@@ -380,7 +377,7 @@ function renderPlans() {
     .forEach((button) => button.addEventListener("click", handleCardAction));
 }
 
-function handleCardAction(event) {
+async function handleCardAction(event) {
   const action = event.currentTarget.dataset.action;
   const card = event.currentTarget.closest(".plan-card");
   if (!card) return;
@@ -392,16 +389,37 @@ function handleCardAction(event) {
   if (action === "edit") return openModal(plan);
 
   if (action === "complete") {
-    plan.status = "completed";
-    plan.updatedAt = new Date().toISOString();
-    persistToLocalStorage();
-    return renderPlans();
+    try {
+      // Optimista
+      plan.status = "completed";
+      plan.updatedAt = new Date().toISOString();
+      persistToLocalStorage();
+      renderPlans();
+
+      await updatePlanSupabase(id, { status: "completed" });
+      setSyncMessage("Marcado como completado ✅");
+    } catch (err) {
+      setSyncMessage(`No se pudo completar: ${err.message}`, true);
+      await loadPlansFromSupabase(true);
+      renderPlans();
+    }
+    return;
   }
 
   if (action === "delete") {
-    plans = plans.filter((item) => item.id !== id);
-    persistToLocalStorage();
-    renderPlans();
+    try {
+      // Optimista
+      plans = plans.filter((item) => item.id !== id);
+      persistToLocalStorage();
+      renderPlans();
+
+      await deletePlanSupabase(id);
+      setSyncMessage("Eliminado ✅");
+    } catch (err) {
+      setSyncMessage(`No se pudo eliminar: ${err.message}`, true);
+      await loadPlansFromSupabase(true);
+      renderPlans();
+    }
   }
 }
 
@@ -446,13 +464,14 @@ function validateForm() {
   return true;
 }
 
-function handleFormSubmit(event) {
+async function handleFormSubmit(event) {
   event.preventDefault();
   if (!validateForm()) return;
 
   const now = new Date().toISOString();
+
   const payload = {
-    id: els.planId.value || generateId(),
+    id: els.planId.value || cryptoId(),
     title: els.titleInput.value.trim(),
     date: els.dateInput.value.trim(),
     time: els.timeInput.value.trim(),
@@ -461,11 +480,12 @@ function handleFormSubmit(event) {
     updatedAt: now,
   };
 
+  // Optimista en UI
   if (state.editingId) {
-    plans = plans.map((plan) =>
-      plan.id !== state.editingId
-        ? plan
-        : normalizePlan({ ...plan, ...payload, createdAt: plan.createdAt, updatedAt: now })
+    plans = plans.map((p) =>
+      p.id !== state.editingId
+        ? p
+        : normalizePlan({ ...p, ...payload, createdAt: p.createdAt, updatedAt: now })
     );
   } else {
     plans.unshift(normalizePlan({ ...payload, createdAt: now, updatedAt: now }));
@@ -474,15 +494,50 @@ function handleFormSubmit(event) {
   persistToLocalStorage();
   renderPlans();
   closeModal();
+
+  // Persistencia en Supabase
+  try {
+    if (!sb) throw new Error("Supabase no está configurado.");
+
+    if (state.editingId) {
+      await updatePlanSupabase(state.editingId, {
+        title: payload.title,
+        date: payload.date,
+        time: payload.time,
+        description: payload.description,
+        status: payload.status,
+      });
+      setSyncMessage("Actualizado ✅");
+    } else {
+      // Crear en Supabase y sincronizar ID real si Supabase generó uno distinto
+      const created = await createPlanSupabase(payload);
+
+      // Si Supabase generó ID diferente al optimista, reemplaza en array
+      const idx = plans.findIndex((p) => p.id === payload.id);
+      if (idx >= 0 && created.id !== payload.id) {
+        plans[idx] = created;
+        persistToLocalStorage();
+        renderPlans();
+      }
+      setSyncMessage("Creado ✅");
+    }
+  } catch (err) {
+    setSyncMessage(`No se pudo guardar en la nube: ${err.message}`, true);
+    // Re-sync para evitar que quede desalineado
+    await loadPlansFromSupabase(true);
+    renderPlans();
+  }
 }
 
+/* Exporta backup local (JSON) */
 function exportPlans() {
-  const text = serializePlansToTxt(plans);
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const blob = new Blob([JSON.stringify(plans, null, 2)], {
+    type: "application/json;charset=utf-8",
+  });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = "my-plans-export.txt";
+  anchor.download = "my-plans-backup.json";
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
