@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Plans</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <h1>My Plans</h1>
+          <p class="subtitle">Organiza tus planes con claridad</p>
+        </div>
+        <div class="topbar-actions">
+          <div class="counter" id="planCounter">0 planes</div>
+          <button class="btn btn-primary" id="newPlanBtn" type="button">Nuevo Plan</button>
+          <button class="btn btn-soft" id="exportBtn" type="button">Exportar</button>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="Filtros y búsqueda">
+        <label class="field-search" for="searchInput">
+          <span class="field-label">Buscar</span>
+          <input id="searchInput" type="search" placeholder="Título o descripción" />
+        </label>
+
+        <label class="field-select" for="statusFilter">
+          <span class="field-label">Estado</span>
+          <select id="statusFilter">
+            <option value="all">Todos</option>
+            <option value="planned">Planned</option>
+            <option value="completed">Completed</option>
+            <option value="canceled">Canceled</option>
+          </select>
+        </label>
+
+        <label class="field-select" for="sortByDate">
+          <span class="field-label">Ordenar</span>
+          <select id="sortByDate">
+            <option value="desc">Fecha descendente</option>
+            <option value="asc">Fecha ascendente</option>
+          </select>
+        </label>
+      </section>
+
+      <main>
+        <section class="plans-grid" id="plansList" aria-live="polite"></section>
+        <div class="empty-state hidden" id="emptyState">
+          <h2>Sin resultados</h2>
+          <p>Empieza creando tu primer plan o ajusta los filtros.</p>
+        </div>
+      </main>
+    </div>
+
+    <button class="fab" id="mobileNewPlanBtn" type="button" aria-label="Crear nuevo plan">+</button>
+
+    <div class="modal-backdrop hidden" id="planModalBackdrop" aria-hidden="true">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <header class="modal-header">
+          <h2 id="modalTitle">Nuevo Plan</h2>
+          <button class="icon-btn" id="closeModalBtn" type="button" aria-label="Cerrar">×</button>
+        </header>
+
+        <form id="planForm" novalidate>
+          <input type="hidden" id="planId" />
+
+          <label class="field" for="titleInput">
+            <span>Título *</span>
+            <input id="titleInput" type="text" minlength="3" required placeholder="Ej. Revisar objetivos del mes" />
+            <small class="error" id="titleError"></small>
+          </label>
+
+          <div class="field-row">
+            <label class="field" for="dateInput">
+              <span>Fecha</span>
+              <input id="dateInput" type="date" />
+            </label>
+            <label class="field" for="timeInput">
+              <span>Hora</span>
+              <input id="timeInput" type="time" />
+            </label>
+          </div>
+
+          <label class="field" for="statusInput">
+            <span>Estado</span>
+            <select id="statusInput">
+              <option value="planned">Planned</option>
+              <option value="completed">Completed</option>
+              <option value="canceled">Canceled</option>
+            </select>
+          </label>
+
+          <label class="field" for="descriptionInput">
+            <span>Descripción</span>
+            <textarea id="descriptionInput" rows="4" placeholder="Detalles opcionales"></textarea>
+          </label>
+
+          <footer class="modal-footer">
+            <button class="btn btn-soft" id="cancelFormBtn" type="button">Cancelar</button>
+            <button class="btn btn-primary" type="submit">Guardar</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
